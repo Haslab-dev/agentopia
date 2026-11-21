@@ -80,8 +80,10 @@ without the launcher works too, but `/run-live-proof` will refuse with
   typing effect. A failed turn (e.g. provider HTTP 503) is persisted as a
   `system` transcript entry and the meeting continues; if every turn
   fails, the meeting is marked `failed`.
-- **Persistence**: tables `meetings` + `meeting_messages` (migration
-  `20261121000002_meetings_notifications.sql` for the Supabase path). The
+- **Persistence**: tables `meetings` + `meeting_messages` in the local
+  SQLite schema; the D1 migration
+  `cloudflare/d1/migrations/0002_meetings_notifications.sql` mirrors them
+  for the cloud target. The
   organizer writes minutes (summary, decisions, action items) through the
   same `write_document` executor as tasks — via the streaming call with
   one retry, because the gateway's provider pool intermittently fails
@@ -94,11 +96,13 @@ without the launcher works too, but `/run-live-proof` will refuse with
 
 ## Not here yet (Integration Required)
 
-Supabase persistence + Auth + RLS: the SQL migration is written
-(`supabase/migrations/` at repo root) and `src/db/supabase-repository.ts`
-implements the same interface as a loud stub — it needs Lutfi's own
-Supabase project (URL + service-role key, server-side only) before any of
-it runs. No fake login exists. External messaging delivery, multi-provider
+Cloudflare D1 persistence + auth: the D1 migration is written
+(`cloudflare/d1/migrations/` at repo root) and `src/db/d1-repository.ts`
+holds the same interface as a loud stub — D1 is reachable only from the
+Worker runtime (binding `env.DB`), so it activates with the orchestrator's
+Worker port and a D1 database that has not been created yet (plan:
+`cloudflare/README.md` at repo root). Auth will be Cloudflare Access.
+No fake login exists. External messaging delivery, multi-provider
 adapters beyond the generic OpenAI-compatible one, and parallel run
 workers are likewise not built.
 

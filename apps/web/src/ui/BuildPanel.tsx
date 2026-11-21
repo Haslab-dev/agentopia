@@ -199,7 +199,7 @@ export function BuildPanel() {
         <span>
           Furnitur <b>bawaan</b> ruangan tidak bisa dipilih/dihapus — hanya objek tambahan editor.
           Objek editor bersifat <b>dekoratif</b>: agent tidak menghindarinya dan routing tidak berubah.
-          Berbagi layout antar pengguna lewat server: <b>Integration Required</b> — butuh project Supabase Lutfi (penyimpanan per akun belum ada).
+          Berbagi layout antar pengguna lewat server: <b>Integration Required</b> — Cloudflare D1 (penyimpanan per akun belum dibuat).
         </span>
       </p>
     </section>

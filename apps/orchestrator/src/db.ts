@@ -6,9 +6,10 @@ import { join } from 'node:path'
 // Persistence for the Phase 3 agent engine (ARCHITECTURE.md §4, subset).
 // The engine and API talk ONLY to the Repository interface below. Today's
 // implementation is SQLite (bun:sqlite, zero dependencies, a real file on
-// disk that survives process restarts). The Supabase implementation of the
-// same interface lives in db/supabase-repository.ts and is Integration
-// Required — it needs Lutfi's own Supabase project (§4, RLS per org).
+// disk that survives process restarts). The cloud implementation of the
+// same interface targets Cloudflare D1 — the same SQLite dialect — and
+// lives in db/d1-repository.ts as an Integration Required stub: D1 is
+// reachable only from the Worker runtime (see cloudflare/README.md).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface AgentRow {

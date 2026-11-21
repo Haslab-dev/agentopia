@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { CompatibleLLM } from './llm/compatible'
 import { runLiveProof, type ProofResult } from './proof'
 import { SqliteRepository, type Repository } from './db'
-import { SupabaseRepository } from './db/supabase-repository'
+import { D1Repository } from './db/d1-repository'
 import { TaskEngine } from './engine'
 import { MeetingEngine } from './meetings'
 import { broadcastControl, emit, eventsResponse } from './events'
@@ -12,8 +12,8 @@ import { PRICING_NOTE } from './pricing'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Orchestrator — Phase 3 agent engine (ARCHITECTURE.md §1.1, §6 Fase 3).
-// Task engine + SQLite persistence (Repository interface; Supabase is the
-// prepared-but-unconnected implementation) + tool registry with approval
+// Task engine + SQLite persistence (Repository interface; Cloudflare D1 is
+// the prepared-but-unconnected cloud implementation) + tool registry with approval
 // gate + usage tracking. Work status leaves ONLY as frozen §1.3 events
 // over SSE. The Kenari key exists solely as process env (run.py launcher,
 // Secure Vault surrogate) — never in code, logs, DB, or the browser.
@@ -28,9 +28,9 @@ const ARTIFACTS_DIR = join(ROOT, 'artifacts')
 const DB_PATH = process.env.LW_DB_PATH ?? join(ROOT, 'data', 'living-world.db')
 
 let repo: Repository
-if (process.env.REPO === 'supabase') {
+if (process.env.REPO === 'd1') {
   try {
-    repo = new SupabaseRepository()
+    repo = new D1Repository()
   } catch (err) {
     console.error(`[orchestrator] ${err instanceof Error ? err.message : String(err)}`)
     process.exit(1)

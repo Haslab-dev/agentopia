@@ -194,7 +194,7 @@ export function Sidebar() {
       })}
       <div className="mt-auto hidden rounded-xl bg-sand/80 p-2.5 text-[10.5px] leading-snug text-ink/60 sm:block">
         Phase 6: <b>Build Mode</b> is live — add furniture per floor; layouts persist in this
-        browser (localStorage). Accounts (Supabase Auth): <b>Integration Required</b>. The demo driver still runs, labelled.
+        browser (localStorage). Accounts (Cloudflare Access): <b>Integration Required</b>. The demo driver still runs, labelled.
       </div>
     </nav>
   )

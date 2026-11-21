@@ -14,7 +14,7 @@ Phase 7 — Performance, Security & QA. Architecture: see
 > sensitive tools, and per-agent usage records (Tasks panel → LIVE tasks).
 > Phase 4 wires that engine to the world in real time: live run steps,
 > real multi-agent LLM meetings (Meetings panel), a notification center,
-> and follow-live camera tracking. User accounts (Supabase Auth) remain
+> and follow-live camera tracking. User accounts (Cloudflare Access) remain
 > *Integration Required* — see the Phase 3 table below.
 
 ## Run it
@@ -120,8 +120,8 @@ calls; `ui/` never touches Three.js directly.
 | Tool registry with permission check (per-agent `allowed_tools`; denial recorded as `denied_permission`) | PASS (code + denial path implemented; live denial not exercised in verification) |
 | Approval gate: `send_external_message` pauses the run in persisted `waiting_approval`; UI card approves/rejects | PASS — rejection verified (tool recorded `rejected`, never executed; task completed its remaining work); approval verified (recorded `approved_not_sent` — nothing is sent, no messaging integration exists) |
 | Usage tracking: real provider token counts per call/agent; cost = estimate at a documented assumed tariff (USD 0.30/1M in, 1.20/1M out — not Kenari billing) | PASS — verification day total: 10,165 in / 3,118 out tokens, 10 calls |
-| Supabase: migration SQL for the §4 core tables written to `supabase/migrations/`; repository stub behind the same interface | PREPARED, NOT CONNECTED — "Integration Required": needs Lutfi's Supabase project; RLS policies + cross-org test (§6 Fase 3 criterion) NOT TESTED because there is no project to test against |
-| User registration/login (Supabase Auth) | NOT IMPLEMENTED — Integration Required, marked in the Settings panel; no fake login |
+| Cloudflare D1: migration SQL for the running schema written to `cloudflare/d1/migrations/`; `D1Repository` stub behind the same interface | PREPARED, NOT CONNECTED — "Integration Required": cloud target swapped from Supabase to the Cloudflare Stack on Lutfi's decision (2026-11-21); no D1 database created yet; per-org isolation test (§6 Fase 3 criterion) NOT TESTED because there is no cloud database to test against |
+| User registration/login (Cloudflare Access) | NOT IMPLEMENTED — Integration Required, marked in the Settings panel; no fake login |
 | Web panels with server data (Agents, Tasks + approvals, Activity server log, per-agent usage, Settings) + honest "live channel disconnected" states when the orchestrator is down | PASS — screenshots 1280px with live data (`lw3-tasks.png`, `lw3-agents.png` in workspace root) |
 | Frozen event contract §1.3 / `packages/shared-types` | UNCHANGED — 0 files touched in `world/`, `simulation/`, `packages/` this phase |
 | §7 proof endpoint | PASS — kept intact as the regression path |
@@ -141,7 +141,7 @@ calls; `ui/` never touches Three.js directly.
 | Follow-live: "Ikuti live" on a running/queued/waiting task (and task notifications) focuses the camera on the executing agent with follow enabled and opens its context | PASS — wired to the existing follow-camera; exercised via UI state (visual chase-cam framing itself is the Phase 1/2 follow rig, unchanged) |
 | Demo mode separation: the scripted 14:00 demo meeting stays labelled demo and is never mixed with live meetings (separate panel section, `source` labels, live meetings listed from the server only) | PASS |
 | Frozen event contract §1.3 / `packages/shared-types` | UNCHANGED — 0 files touched in `world/`, `simulation/`, `packages/` this phase (newest mtime there predates Phase 4); meeting behaviour achieved entirely through existing event types. `packages/shared-types` untouched — the web's meeting/notification shapes are client-side mirrors of the REST API, not contract types |
-| Supabase meetings/notifications migration (`20261121000002_meetings_notifications.sql`) + repository stubs | PREPARED, NOT APPLIED — same Integration Required status as Phase 3 (needs Lutfi's Supabase project) |
+| Cloudflare D1 meetings/notifications migration (`cloudflare/d1/migrations/0002_meetings_notifications.sql`) + repository stub | PREPARED, NOT APPLIED — same Integration Required status as Phase 3 (no D1 database created yet) |
 | Web build (`bun run build`: tsc + vite) | PASS |
 
 ## Phase 5 feature status (honest, verified 2026-11-21)
@@ -192,7 +192,7 @@ anchor/portal based; nothing in `simulation/` changed).
 | Layout persistence: localStorage `living-world-layout-v1` (versioned), auto-saved on every change, loaded at start; Reset Layout restores the built-in default | PASS — reload produced a byte-identical object list, screenshot `lw6-reload.png` |
 | Export JSON: downloads `living-world-layout.json` with the exact layout | PARTIAL — the real Export button starts the download with the right filename and `exportJSON()` content is exactly the layout (both asserted via CDP), but the completed file could not be captured in this VM: its headless Chrome cancels ALL blob downloads (proven with a minimal repro page unrelated to the app), so file-on-disk completion is NOT TESTED here |
 | Import JSON via the panel's file input replaces the layout | PASS — imported sofa (`imp-1`) replaced the layout through the real `<input type=file>` (CDP `DOM.setFileInputFiles`) |
-| Shared/server layout persistence | NOT IMPLEMENTED — "Integration Required" in the panel: needs Lutfi's Supabase project (per-account storage does not exist yet) |
+| Shared/server layout persistence | NOT IMPLEMENTED — "Integration Required" in the panel: needs Cloudflare D1 (per-account storage does not exist yet) |
 | §6 (@Wang) extras: add rooms, change materials, undo/redo ≥ 20 steps, automatic nav-validation of edited layouts | NOT IMPLEMENTED — outside this run's brief; the brief's editor (place/move/rotate/delete + portal-safe zones + local persistence) is what shipped |
 | Frozen event contract §1.3 / orchestrator / `simulation/` | UNCHANGED — 0 files touched (mtimes predate this phase); building click handlers in `world/` only gained a build-mode guard (no camera flights while editing) |
 | Web build (`bun run build`: tsc + vite) | PASS |
@@ -236,12 +236,13 @@ Kenari QA items should be re-run once the orchestrator can start again.
 
 ## Remaining Integration Required
 
-- **Supabase**: migrations + `SupabaseRepository` stub are prepared; needs
-  Lutfi's Supabase project. RLS policies + cross-org isolation test NOT
-  TESTED (no project exists).
+- **Cloudflare D1**: migrations + `D1Repository` stub are prepared in
+  `cloudflare/` (target swapped from Supabase on Lutfi's decision,
+  2026-11-21); no D1 database has been created. Per-org isolation test
+  NOT TESTED (no cloud database exists). Activation: `cloudflare/README.md`.
 - **User auth**: none exists by design so far — the orchestrator API is
   unauthenticated and CORS-open for local development. Do not expose
-  :8787 beyond localhost until auth (Supabase) lands. The approval gate
+  :8787 beyond localhost until auth (Cloudflare Access) lands. The approval gate
   protects against an *agent* acting without a human; it is not a
   network security boundary.
 - **Shared/server layout persistence** for Build Mode (localStorage only).

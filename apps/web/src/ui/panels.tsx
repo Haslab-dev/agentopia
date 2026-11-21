@@ -881,10 +881,10 @@ export function SettingsPanel() {
       <div className="mt-3 rounded-xl bg-amber-100 px-3 py-2.5 text-[12px] leading-snug text-amber-900">
         <CircleAlert size={13} className="mr-1 inline" />
         <b>User accounts — Integration Required.</b> Login/registration is designed on
-        Supabase Auth (architecture §4) and needs <b>Lutfi's own Supabase project</b>. The
-        database migration is prepared in <code className="rounded bg-white/70 px-1">supabase/migrations/</code> and
-        a Supabase repository stub waits behind the same interface — but no project is
-        connected, so <b>no login is offered</b> rather than faking one.
+        Cloudflare Access (architecture §4); the cloud target is the Cloudflare stack
+        (Pages + Worker + D1). The D1 migration is prepared in <code className="rounded bg-white/70 px-1">cloudflare/d1/migrations/</code> and
+        a D1 repository stub waits behind the same interface — but no D1 database is
+        created yet, so <b>no login is offered</b> rather than faking one.
       </div>
       <div className="mt-2 rounded-xl bg-sand/70 px-3 py-2.5 text-[12px] leading-snug text-ink/70">
         <b>External messaging — Integration Required.</b> The <code className="rounded bg-white/70 px-1">send_external_message</code> tool
@@ -1051,7 +1051,7 @@ export function ContextPanel() {
           <p className="mt-2 text-[11px] leading-snug text-ink/50">
             Real tasks now run through the Phase 3 engine (orchestrator + database) on the
             same frozen event contract — see the Tasks panel. User accounts remain
-            <b> Integration Required</b> (Supabase, Settings panel).
+            <b> Integration Required</b> (Cloudflare D1 — Integration Required, Settings panel).
           </p>
         </>
       )}

@@ -14,8 +14,9 @@ export { ORCHESTRATOR_URL }
 // not care) which source produced an event.
 //
 // Phase 3: the orchestrator behind this stream is now a real task engine
-// (SQLite-backed agents/tasks/runs — see ServerApi.ts). User accounts and
-// Supabase remain Integration Required (Settings panel says so, plainly).
+// (SQLite-backed agents/tasks/runs — see ServerApi.ts). User accounts
+// (Cloudflare Access) and Cloudflare D1 remain Integration Required
+// (Settings panel says so, plainly).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface LiveConnection {
@@ -160,7 +161,7 @@ export function connectLive(): LiveConnection {
     ok: false,
     reason:
       'Live channel opening — the orchestrator (apps/orchestrator, Kenari) streams real events here. ' +
-      'User accounts (Supabase Auth) remain Integration Required.',
+      'User accounts (Cloudflare Access) remain Integration Required.',
   }
 }
 

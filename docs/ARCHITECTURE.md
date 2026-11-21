@@ -3,6 +3,8 @@
 Dokumen arsitektur induk. Ditulis oleh @Wang (Innovator), diimplementasikan oleh @Jack.
 Prinsip yang tidak bisa ditawar: **backend adalah sumber kebenaran; dunia 3D hanyalah representasi visualnya.** Avatar tidak pernah "mengaku" menyelesaikan pekerjaan yang backend gagalkan.
 
+> **Catatan revisi — 2026-11-21:** target cloud diganti dari Supabase ke Cloudflare Stack atas keputusan Lutfi (web → Pages; orchestrator → Worker + Durable Objects; database → D1; artefak → R2; auth → Cloudflare Access). Persistence yang berjalan tetap SQLite lokal; migrasi D1 ada di `cloudflare/d1/migrations/`, peta target + langkah aktivasi di `cloudflare/README.md`. Kontrak event §1.3 tidak berubah.
+
 ---
 
 ## 1. Arsitektur Teknis Keseluruhan
@@ -31,9 +33,9 @@ Prinsip yang tidak bisa ditawar: **backend adalah sumber kebenaran; dunia 3D han
 │  └─ Event Bus — setiap perubahan status dipancarkan sbg     │
 │      event bertipe (lihat 1.3)                              │
 ├─────────────────────────────────────────────────────────────┤
-│ SUPABASE                                                    │
-│  Postgres (data + RLS per org) · Auth · Realtime (status    │
-│  ringan) · Storage (artefak)                                │
+│ CLOUDFLARE (target cloud — Integration Required)            │
+│  D1 (data, dialek SQLite) · Worker + Durable Objects        │
+│  (koordinasi real-time) · R2 (artefak) · Access (auth)      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,7 +67,7 @@ Kontrak satu arah dan eksplisit. Backend memancarkan event; Simulation/World Eng
 | `agent.offline` | Pulang ke apartemen / tidur |
 | *(tidak ada event; jadwal kosong)* | Simulation Engine menjalankan leisure terjadwal |
 
-Transport: WebSocket dari orchestrator (event pekerjaan, presisi tinggi) + Supabase Realtime untuk status entitas ringan (CRUD dari klien lain). Klien menggabungkan keduanya ke satu `EventStore` Zustand; World Engine hanya membaca store itu — tidak tahu-menahu soal jaringan.
+Transport: WebSocket dari orchestrator (event pekerjaan, presisi tinggi) + stream Durable Object untuk status entitas ringan (CRUD dari klien lain). Klien menggabungkan keduanya ke satu `EventStore` Zustand; World Engine hanya membaca store itu — tidak tahu-menahu soal jaringan.
 
 ### 1.4 Demo mode vs Live mode — terpisah secara struktural, bukan flag kosmetik
 
@@ -140,9 +142,9 @@ ai-agent-living-world/
 ├─ packages/
 │  ├─ shared-types/             # tipe event, DTO, skema validasi (dipakai web + orchestrator)
 │  └─ world-schema/             # tipe layout dunia (building/floor/room/object) + blueprint
-├─ supabase/
-│  ├─ migrations/               # skema DB versi-terkontrol
-│  └─ seed/                     # seed demo world + agent contoh
+├─ cloudflare/
+│  ├─ d1/migrations/            # skema D1 versi-terkontrol (dialek SQLite)
+│  └─ README.md                 # peta target deploy + langkah aktivasi
 ├─ docs/                        # dokumen ini + SETUP.md, TEST-REPORT.md, BACKLOG.md
 ├─ .env.example                 # tanpa secret asli, selalu
 └─ package.json                 # workspace root
@@ -152,9 +154,9 @@ Aturan batas modul: `world/` tidak import dari `agent-client/` (hanya dari `stat
 
 ---
 
-## 4. Struktur Database (PostgreSQL via Supabase)
+## 4. Struktur Database (SQLite lokal → Cloudflare D1)
 
-Kolom kunci saja. Semua tabel multi-tenant membawa `org_id` dan dilindungi RLS per org. Semua tabel punya `id uuid PK`, `created_at`, `updated_at` kecuali disebut lain.
+Kolom kunci saja — ini desain target 27 tabel. Subset yang berjalan hari ini hidup di SQLite lokal (`apps/orchestrator/src/db.ts`); target cloud-nya D1, dialek SQLite yang sama, jadi pemetaan tipenya lurus: uuid → TEXT, jsonb → TEXT (JSON), timestamptz → TEXT (ISO-8601). Semua tabel multi-tenant membawa `org_id`; isolasi per org ditegakkan di lapisan Worker (Cloudflare Access + cek org di query) — D1 tidak punya RLS. Semua tabel punya `id PK`, `created_at`, `updated_at` kecuali disebut lain.
 
 **Identitas & dunia**
 - `users` — id (= auth user), email, display_name.
@@ -182,7 +184,7 @@ Kolom kunci saja. Semua tabel multi-tenant membawa `org_id` dan dilindungi RLS p
 - `agent_runs` — id, task_id, agent_id, provider, model, status, started_at, ended_at, error, is_demo.
 - `tool_calls` — id, run_id, tool_name, args (jsonb, tersanitasi), result_status, duration_ms, requires_approval, approval_id.
 - `approvals` — id, org_id, task_id/run_id, action_summary, status (`pending|approved|rejected`), decided_by, decided_at.
-- `artifacts` — id, task_id, run_id, kind (`doc|code|image|report`), title, storage_path (Supabase Storage), created_by_agent_id.
+- `artifacts` — id, task_id, run_id, kind (`doc|code|image|report`), title, storage_path (R2), created_by_agent_id.
 - `knowledge_sources` — id, org_id, name, kind (`file|url|note`), storage_path/content_ref, access_scope.
 
 **Kolaborasi & audit**
@@ -229,7 +231,7 @@ Selesai bila: build + typecheck lulus; scene kampus + HQ 1 lantai detail termuat
 Selesai bila: HQ 4 lantai dengan floor selection + fade atap terverifikasi per lantai; gedung research, area rekreasi (kolam beranimasi air, lapangan bola mini), area sosial (café), apartemen dengan kamar per agent; agent bisa berpindah gedung/lantai lewat portal tanpa teleport visual; jumlah draw calls kampus statis < 150 (diukur, bukan dikira).
 
 **Fase 3 — Agent Engine**
-Selesai bila: user bisa registrasi/login (Supabase Auth); membuat agent lewat form dan tersimpan di DB (bukan localStorage); menghubungkan 1 provider dengan key terenkripsi; memberi 1 tugas nyata → agent run di orchestrator → artefak (dokumen) tersimpan di Storage dan bisa dibuka; tool tanpa izin tampil `Integration Required`; run yang gagal tampil `failed` dengan log — tidak ada jalur kode yang menandai gagal sebagai sukses; RLS teruji: user A tidak bisa membaca data org B (test otomatis).
+Selesai bila: user bisa registrasi/login (Cloudflare Access); membuat agent lewat form dan tersimpan di DB (bukan localStorage); menghubungkan 1 provider dengan key terenkripsi; memberi 1 tugas nyata → agent run di orchestrator → artefak (dokumen) tersimpan di R2 dan bisa dibuka; tool tanpa izin tampil `Integration Required`; run yang gagal tampil `failed` dengan log — tidak ada jalur kode yang menandai gagal sebagai sukses; isolasi org teruji: user A tidak bisa membaca data org B (test otomatis di lapisan Worker).
 
 **Fase 4 — Real-Time Visual Connection**
 Selesai bila: seluruh pemetaan event→animasi di tabel 1.3 bekerja dari event live (bukan scripted); meeting 3 agent berjalan lewat orchestrator, transkrip asli tampil, notulen + action items ter-generate sebagai artefak; latency event→animasi < 1 detik di jaringan lokal (diukur dari timestamp event vs frame animasi mulai).
