@@ -1,0 +1,1 @@
+{"name":"ai-agent-living-world","private":true,"scripts":{"build":"cd apps/web && bun run build","dev":"cd apps/web && bun run dev","preview":"cd apps/web && bun run preview"},"version":"0.1.0","workspaces":["apps/*","packages/*"]}
