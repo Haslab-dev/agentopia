@@ -89,7 +89,7 @@ export class CompatibleLLM {
         max_tokens: opts?.maxTokens ?? 6000,
       }),
       signal: AbortSignal.timeout(opts?.timeoutMs ?? 180_000),
-      redirect: 'error',
+      redirect: 'manual',
     })
     if (!res.ok) {
       const body = (await res.text()).slice(0, 300)
@@ -165,7 +165,7 @@ export class CompatibleLLM {
         stream_options: { include_usage: true },
       }),
       signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
-      redirect: 'error',
+      redirect: 'manual',
     })
     if (!res.ok) {
       const body = (await res.text()).slice(0, 300)
@@ -249,7 +249,7 @@ export class CompatibleLLM {
         max_tokens: opts?.maxTokens ?? 1200,
       }),
       signal: AbortSignal.timeout(opts?.timeoutMs ?? 120_000),
-      redirect: 'error',
+      redirect: 'manual',
     })
     if (!res.ok) {
       const body = (await res.text()).slice(0, 300)
