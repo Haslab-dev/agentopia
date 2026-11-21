@@ -57,8 +57,23 @@ export function Pool() {
           </mesh>
         </group>
       ))}
-      <PlantSet floor={0} spots={[{ pos: [cx + 10.5, cz - 7.5] }, { pos: [cx + 10.5, cz + 7.5] }]} />
     </group>
+  )
+}
+
+/** Fase 7: pool + café plants in ONE PlantSet (was two — 6 calls → 3). */
+export function RecreationPlants() {
+  const px = POOL_EDGE[0] + 3
+  const pz = POOL_EDGE[1] - 4
+  const [cx, cz] = CAFE
+  return (
+    <PlantSet
+      floor={0}
+      spots={[
+        { pos: [px + 10.5, pz - 7.5] }, { pos: [px + 10.5, pz + 7.5] },
+        { pos: [cx - 7, cz + 3] }, { pos: [cx + 7.5, cz + 3] },
+      ]}
+    />
   )
 }
 
@@ -125,7 +140,6 @@ export function Cafe() {
       </mesh>
       {/* outdoor tables (instanced) */}
       <RoundTableSet floor={0} umbrella spots={[[-4, 7], [1, 8], [6, 7]].map(([dx, dz]) => [cx + dx, cz + dz] as [number, number])} />
-      <PlantSet floor={0} spots={[{ pos: [cx - 7, cz + 3] }, { pos: [cx + 7.5, cz + 3] }]} />
     </group>
   )
 }

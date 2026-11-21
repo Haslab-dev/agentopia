@@ -242,7 +242,18 @@ export class SqliteRepository implements Repository {
   constructor(dbPath: string, private defaultModel: string) {
     mkdirSync(join(dbPath, '..'), { recursive: true })
     this.db = new Database(dbPath, { create: true })
-    this.db.exec('PRAGMA journal_mode = WAL;')
+    // Journal mode (Fase 7): WAL is preferred, but it needs shared-memory
+    // mmap + fsync, which restricted sandboxes may block (opening then dies
+    // with SQLITE_IOERR_SHMSIZE). This repository is a single in-process
+    // connection, so the DELETE rollback journal loses nothing in practice —
+    // fall back to it (with synchronous=OFF, the only mode that also works
+    // where fsync is blocked) instead of refusing to start.
+    try {
+      this.db.exec('PRAGMA journal_mode = WAL;')
+    } catch {
+      this.db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = OFF;')
+      console.warn('[db] WAL unavailable on this filesystem — fell back to DELETE journal (synchronous=OFF)')
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',

@@ -1,10 +1,10 @@
-# AI Agent Living World 3D
+# AI Agent Living World 3D — "Agentopia"
 
 A living 3D campus where AI agents are represented by animated avatars.
-**Phase 1 — Core 3D World**, **Phase 2 — World Expansion**,
-**Phase 3 — Agent Engine**, **Phase 4 — Real-Time Visual Connection**,
-**Phase 5 — Life Simulation** and **Phase 6 — World Editor**
-are implemented. Architecture: see
+**All 7 phases of the roadmap are implemented**: Phase 1 — Core 3D World,
+Phase 2 — World Expansion, Phase 3 — Agent Engine, Phase 4 — Real-Time
+Visual Connection, Phase 5 — Life Simulation, Phase 6 — World Editor,
+Phase 7 — Performance, Security & QA. Architecture: see
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (@Wang); this code follows it.
 
 > **Honesty label:** the world still runs its **DEMO mode** driver in
@@ -24,6 +24,17 @@ bun install
 bun run dev        # http://localhost:5173
 bun run build      # tsc + vite build (verified passing)
 bun run preview    # serves the production build on :4173
+```
+
+Orchestrator (live tasks/meetings; optional — the world also runs its
+labelled demo mode without it):
+
+```bash
+cd apps/orchestrator && python3 run.py   # API + SSE on :8787
+# run.py attaches the Kenari credential from the Secure Vault as a
+# surrogate env var; the key never appears in code, logs or the bundle.
+# State: SQLite at apps/orchestrator/data/living-world.db
+# (override with LW_DB_PATH). Set LW_DEMO=0 to silence the demo driver.
 ```
 
 ## How it fits together
@@ -187,10 +198,74 @@ anchor/portal based; nothing in `simulation/` changed).
 | Web build (`bun run build`: tsc + vite) | PASS |
 | 390 px Build Mode | PASS — panel + catalog render and are usable (`lw6-build-390.png`) |
 
+## Phase 7 feature status (honest, measured 2026-11-21)
+
+Performance method (same as Phase 2): `renderer.info.render.calls` sampled
+via the `?perf` PerfProbe, median of 6 samples; static views use
+`?noagents`. FPS in this VM is 0.1–1.5 fps under SwiftShader **software
+rendering — it is not representative of any real user device** and no UX
+conclusion is drawn from it; draw calls remain the portable metric.
+
+| Item | Status |
+|---|---|
+| Draw calls, floor-selected static: **139 → 119** | PASS (<150) |
+| Draw calls, All-floors static: **206 → 126** | PASS (<150) — the Phase 2 FAIL is closed. Method: repeated static furniture (HQ desks/chairs/plants/sofas/lamps/pods/beds/tables across all floors, apartment furniture, recreation plants) merged into one InstancedMesh per part type spanning floors, with the instance `count` capped to the selected floor's prefix — the same visibility rule the scene already used, now also saving the draw calls |
+| Geometry unchanged by the optimisation: triangles identical before/after (14,822 selected / 20,122 all-floors); comparison screenshots taken | PASS |
+| Draw calls, full scene incl. avatars (was 264 at Phase 7 baseline) | NOT MEASURED after the change — the VM's headless Chrome began dying at startup (SIGTRAP) mid-run; see "Known limitations" |
+| Bundle: single chunk 1,278,121 B (gzip 358.6 kB) → split `three` chunk 1,131,885 B (gzip 315.6 kB) + app chunk 148,224 B (gzip 43.5 kB) via `manualChunks`; total dist +0.16% (chunk overhead). The win is cache separation (app updates no longer re-download three.js), not total bytes — stated plainly | PASS |
+| Secrets in the client bundle: `grep` over `dist` for `hsurr`, `KENARI_API_KEY`, `kenari.id`, `Authorization`, `Bearer `, `x-api-key`, `process.env` → 0 hits (the only `sk-` matches are three.js internals and the demo `task-` id prefix) | PASS |
+| Web preview does not serve server data: requests for the SQLite DB, its WAL, orchestrator sources and artifact paths all return the 500-byte SPA fallback `index.html` — zero database bytes | PASS |
+| Orchestrator API audit (code-level): no DELETE endpoints exist; there is no direct tool-execution endpoint — the sensitive tool is reachable only through the engine's approval flow (`decideApproval` is idempotent: re-deciding a settled approval changes nothing); `/artifact` is basename- + `.md`-constrained (no path traversal) | PASS (audit) |
+| Fixes applied: write rate limit (30 POST/PATCH per minute per IP → 429, so a script cannot hammer LLM-spending endpoints) and malformed JSON now returns 400 instead of 500 | IMPLEMENTED + parse-verified (`bun build`); runtime re-test NOT TESTED — see the environment incident below |
+| Approval-gate negative tests (decide unknown id → 404, invalid decision → 400, double-decide no-op), live Kenari task, live 3-agent meeting, restart persistence — this run | NOT TESTED — environment incident below. The gate itself was proven both ways in Phase 3 (rejection and approval), and restart persistence in Phases 3–4 |
+| QA regression: web build PASS; demo flow / life-sim ticking / Build Mode / 390 px in a browser | Build PASS; browser items NOT TESTED this run (Chrome incident below; all four were PASS in their own phases) |
+| DB robustness fix: WAL open could die with `SQLITE_IOERR_SHMSIZE` on filesystems/sandboxes without shared-memory mmap. The repository now falls back to the DELETE journal (+ `synchronous=OFF`) — safe here because the repository is a single in-process connection | IMPLEMENTED — the fallback path was exercised for real during this run (it triggered and started; a further sandbox write block then stopped schema creation) |
+| Frozen event contract §1.3 / `simulation/` / `packages/` | UNCHANGED — Phase 7 touched `world/` (rendering only), `vite.config.ts`, and the orchestrator's HTTP/DB edge |
+
+**Environment incident (2026-11-21, during this run):** the sandbox VM
+progressively blocked `fsync`, `MAP_SHARED` mmap and finally plain writes
+from spawned processes (shell redirection and the editor kept working).
+Consequences, all evidenced in the run log: headless Chrome SIGTRAPs at
+startup (browser QA + the post-change full-scene measurement impossible);
+the orchestrator's SQLite (WAL) could not reopen, and copying the database
+out is blocked, so the Phase 3–5 data file (`apps/orchestrator/data/`,
+DB + 2.6 MB WAL) is **intact but sealed in place** — on any normal
+filesystem SQLite replays the WAL on open and nothing is lost. Do not
+delete `data/`. Runtime re-verification of the API fixes and the live
+Kenari QA items should be re-run once the orchestrator can start again.
+
+## Remaining Integration Required
+
+- **Supabase**: migrations + `SupabaseRepository` stub are prepared; needs
+  Lutfi's Supabase project. RLS policies + cross-org isolation test NOT
+  TESTED (no project exists).
+- **User auth**: none exists by design so far — the orchestrator API is
+  unauthenticated and CORS-open for local development. Do not expose
+  :8787 beyond localhost until auth (Supabase) lands. The approval gate
+  protects against an *agent* acting without a human; it is not a
+  network security boundary.
+- **Shared/server layout persistence** for Build Mode (localStorage only).
+- **Schedule modes** Realistic / Always Working / Custom (Phase 5 §6 item).
+- **Export-file download** verification in a real browser (headless blob
+  downloads are blocked in this VM — Phase 6).
+
+## Known limitations
+
+- FPS on real GPU hardware: NOT MEASURED (only SwiftShader software
+  rendering exists here). Performance at 40–100 agents: NOT TESTED.
+- Avatars have no separation steering — they can overlap at shared
+  anchors. Poses are procedural; no GLB rigs / AnimationMixer yet.
+- Editor objects are decorative: they do not affect agent routing.
+- Meetings/tasks depend on the Kenari gateway, which intermittently
+  returns 503 `all_providers_failed`; failures are recorded honestly as
+  failed runs/turns, never hidden.
+- One cosmetic leftover: `simulation/engine.ts` narrates any
+  `task.started` with the words "(demo script)", including live tasks.
+
 ## Notes
 
-- Bundle is a single JS chunk (three.js); code-splitting is a Phase 7
-  optimisation, not a Phase 1/2 requirement.
+- Bundle: split since Phase 7 into `three` + app chunks (see Phase 7
+  table); the world is the first screen, so the scene is not lazy-loaded.
 - Demo script pacing is wall-clock; sim speed (1×/2×/4×) scales the clock
   and movement.
 - `.env.example` lists the keys the future backend will need. No secrets

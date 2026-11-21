@@ -62,13 +62,31 @@ let lastProof: ProofResult | null = null
 
 const PALETTE = ['#e07a9b', '#5f9e6e', '#7fb3e0', '#f59e4c', '#6ec3c9', '#b48ce0', '#e0654f', '#9db38a']
 
+// Fase 7: minimal write rate limit — per client IP, fixed 60 s window.
+// Generous for the real UI (a human clicks a few writes a minute), tight
+// enough that a script cannot hammer task/meeting creation (each of which
+// can spend real LLM tokens). GETs and the SSE stream are never limited.
+const WRITE_LIMIT_PER_MIN = 30
+const writeHits = new Map<string, { count: number; resetAt: number }>()
+
 const server = Bun.serve({
   port: PORT,
   idleTimeout: 255, // SSE streams are long-lived; heartbeats keep them active
-  async fetch(req) {
+  async fetch(req, srv) {
     const url = new URL(req.url)
     const path = url.pathname
     if (req.method === 'OPTIONS') return new Response(null, { headers: cors })
+
+    if (req.method === 'POST' || req.method === 'PATCH') {
+      const ip = srv.requestIP(req)?.address ?? 'unknown'
+      const nowMs = Date.now()
+      const w = writeHits.get(ip)
+      if (!w || nowMs >= w.resetAt) {
+        writeHits.set(ip, { count: 1, resetAt: nowMs + 60_000 })
+      } else if (++w.count > WRITE_LIMIT_PER_MIN) {
+        return json({ ok: false, error: 'Rate limit: too many write requests — slow down' }, 429)
+      }
+    }
 
     try {
       if (path === '/health') {
@@ -295,6 +313,10 @@ const server = Bun.serve({
 
       return new Response('Not found', { status: 404, headers: cors })
     } catch (err) {
+      // Fase 7: a malformed JSON body is a client error (400), not a crash.
+      if (err instanceof SyntaxError) {
+        return json({ ok: false, error: 'Request body is not valid JSON' }, 400)
+      }
       console.error('[orchestrator] request error', err)
       return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
     }

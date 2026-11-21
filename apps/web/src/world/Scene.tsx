@@ -5,7 +5,7 @@ import { Environment } from './Environment'
 import { HQBuilding } from './HQBuilding'
 import { ResearchBuilding } from './Research'
 import { Apartments } from './Apartments'
-import { Cafe, FootballField, Pool } from './Recreation'
+import { Cafe, FootballField, Pool, RecreationPlants } from './Recreation'
 import { AgentLayer } from './Avatar'
 import { CameraRig } from './CameraRig'
 import { EditorLayer } from './EditorLayer'
@@ -108,6 +108,7 @@ export function Scene({ noAgents = false }: { noAgents?: boolean }) {
       <group name="district-recreation">
         <Pool />
         <FootballField />
+        <RecreationPlants />
       </group>
 
       {/* District: social */}
