@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentWithConfig, MeetingRow, Repository } from './db'
+import type { AgentWithConfig, MeetingRow } from './db'
+import type { AsyncRepository } from './db/async-repository'
 import { CompatibleLLM, type ChatMessage } from './llm/compatible'
-import { TOOLS } from './tools'
+import { TOOLS, type ArtifactStore } from './tools'
 import { estimateCostUsd } from './pricing'
 import { broadcastControl, emit } from './events'
 
@@ -34,17 +35,20 @@ export class MeetingEngine {
   private current: MeetingRow | null = null
 
   constructor(
-    private repo: Repository,
+    private repo: AsyncRepository,
     private llm: CompatibleLLM,
     private artifactsDir: string,
     private keyConfigured: boolean,
+    // Worker runtime only: minutes/transcript bodies go to this store
+    // (D1) instead of the local filesystem. Undefined locally.
+    private artifactStore?: ArtifactStore,
   ) {}
 
   isRunning(): boolean {
     return this.current !== null
   }
 
-  start(input: { topic: string; participantIds: string[]; rounds: number }): MeetingRow {
+  async start(input: { topic: string; participantIds: string[]; rounds: number }): Promise<MeetingRow> {
     if (!this.keyConfigured) {
       throw new Error('KENARI_API_KEY not configured — start the orchestrator via run.py')
     }
@@ -60,8 +64,8 @@ export class MeetingEngine {
       createdAt: now(),
       endedAt: null,
     }
-    this.repo.createMeeting(meeting)
-    this.repo.addActivity('user', 'meeting.started', meeting.id, `"${meeting.topic}" · ${meeting.participantIds.length} agents · ${meeting.rounds} rounds`)
+    await this.repo.createMeeting(meeting)
+    await this.repo.addActivity('user', 'meeting.started', meeting.id, `"${meeting.topic}" · ${meeting.participantIds.length} agents · ${meeting.rounds} rounds`)
     this.current = meeting
     void this.run(meeting).finally(() => {
       if (this.current?.id === meeting.id) this.current = null
@@ -70,9 +74,9 @@ export class MeetingEngine {
   }
 
   private async run(meeting: MeetingRow) {
-    const participants = meeting.participantIds
-      .map((id) => this.repo.getAgent(id))
-      .filter((a): a is AgentWithConfig => a !== null)
+    const participants = (
+      await Promise.all(meeting.participantIds.map((id) => this.repo.getAgent(id)))
+    ).filter((a): a is AgentWithConfig => a !== null)
     const organizer = participants[0]
     let seq = 0
     let speechCount = 0
@@ -145,12 +149,12 @@ export class MeetingEngine {
             })
             const content = res.content.trim()
             seq += 1
-            this.repo.addMeetingMessage({
+            await this.repo.addMeetingMessage({
               id: randomUUID(), meetingId: meeting.id, seq, agentId: agent.id, kind: 'speech',
               content, tokensIn: res.usage?.prompt_tokens ?? 0,
               tokensOut: res.usage?.completion_tokens ?? 0, createdAt: now(),
             })
-            this.repo.addUsage({
+            await this.repo.addUsage({
               id: randomUUID(), agentId: agent.id, runId: meeting.id, provider: agent.config.provider,
               model: res.model, tokensIn: res.usage?.prompt_tokens ?? 0,
               tokensOut: res.usage?.completion_tokens ?? 0,
@@ -164,12 +168,12 @@ export class MeetingEngine {
             const message = err instanceof Error ? err.message : String(err)
             failureCount += 1
             seq += 1
-            this.repo.addMeetingMessage({
+            await this.repo.addMeetingMessage({
               id: randomUUID(), meetingId: meeting.id, seq, agentId: agent.id, kind: 'system',
               content: `${agent.name} gagal berbicara pada giliran ini: ${message.slice(0, 200)}`,
               tokensIn: 0, tokensOut: 0, createdAt: now(),
             })
-            this.repo.addActivity('system', 'meeting.turn_failed', meeting.id, `${agent.name}: ${message.slice(0, 140)}`)
+            await this.repo.addActivity('system', 'meeting.turn_failed', meeting.id, `${agent.name}: ${message.slice(0, 140)}`)
             broadcastControl('meeting-message', { meetingId: meeting.id, agentId: agent.id })
           } finally {
             currentSpeaker = null
@@ -224,7 +228,7 @@ export class MeetingEngine {
           }
         }
         if (!res) throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
-        this.repo.addUsage({
+        await this.repo.addUsage({
           id: randomUUID(), agentId: organizer.id, runId: meeting.id, provider: organizer.config.provider,
           model: res.model, tokensIn: res.usage?.prompt_tokens ?? 0,
           tokensOut: res.usage?.completion_tokens ?? 0,
@@ -233,11 +237,11 @@ export class MeetingEngine {
         })
         const saved = await TOOLS.write_document.execute(
           { title: `Notulen — ${meeting.topic}`, content: res.content },
-          { artifactsDir: this.artifactsDir, taskId: meeting.id },
+          { artifactsDir: this.artifactsDir, taskId: meeting.id, store: this.artifactStore },
         )
         if (saved.artifact) {
           artifactFile = saved.artifact.fileName
-          this.repo.addArtifact({
+          await this.repo.addArtifact({
             id: randomUUID(), taskId: meeting.id, runId: meeting.id, agentId: organizer.id,
             kind: 'minutes', title: saved.artifact.title, fileName: saved.artifact.fileName, createdAt: now(),
           })
@@ -251,46 +255,46 @@ export class MeetingEngine {
             title: `Transkrip Meeting — ${meeting.topic}`,
             content: `# Transkrip Meeting — ${meeting.topic}\n\n> Ringkasan otomatis gagal dibuat (${minutesError}). Dokumen ini adalah transkrip verbatim.\n\n${transcriptText}\n`,
           },
-          { artifactsDir: this.artifactsDir, taskId: meeting.id },
+          { artifactsDir: this.artifactsDir, taskId: meeting.id, store: this.artifactStore },
         )
         if (saved.artifact) {
           artifactFile = saved.artifact.fileName
-          this.repo.addArtifact({
+          await this.repo.addArtifact({
             id: randomUUID(), taskId: meeting.id, runId: meeting.id, agentId: organizer.id,
             kind: 'transcript', title: saved.artifact.title, fileName: saved.artifact.fileName, createdAt: now(),
           })
         }
       }
 
-      this.repo.updateMeeting(meeting.id, {
+      await this.repo.updateMeeting(meeting.id, {
         status: 'completed', artifactFile, endedAt: now(),
         error: minutesError ? `Minutes generation failed: ${minutesError}` : null,
       })
       emit('task.completed', organizer.id, meeting.id, {
         artifact: artifactFile ?? '', meetingId: meeting.id, topic: meeting.topic,
       })
-      this.repo.addNotification({
+      await this.repo.addNotification({
         id: randomUUID(), kind: 'meeting.completed',
         title: `Meeting selesai: ${meeting.topic}`,
         detail: `${speechCount} giliran dari ${participants.length} agent${artifactFile ? ` · ${minutesError ? 'artefak transkrip (notulen otomatis gagal dibuat)' : `notulen: ${artifactFile}`}` : ''}`,
         entityRef: meeting.id, agentId: organizer.id, isRead: false, createdAt: now(),
       })
       broadcastControl('notification', { kind: 'meeting.completed', meetingId: meeting.id })
-      this.repo.addActivity('system', 'meeting.completed', meeting.id, `"${meeting.topic}" · ${speechCount} speeches · ${failureCount} failed turns${artifactFile ? ` · ${artifactFile}` : ''}`)
+      await this.repo.addActivity('system', 'meeting.completed', meeting.id, `"${meeting.topic}" · ${speechCount} speeches · ${failureCount} failed turns${artifactFile ? ` · ${artifactFile}` : ''}`)
       broadcastControl('meeting-ended', { meetingId: meeting.id, status: 'completed' })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      this.repo.updateMeeting(meeting.id, { status: 'failed', error: message, endedAt: now() })
+      await this.repo.updateMeeting(meeting.id, { status: 'failed', error: message, endedAt: now() })
       if (organizer) {
         emit('task.failed', organizer.id, meeting.id, { error: message.slice(0, 200), meetingId: meeting.id })
       }
-      this.repo.addNotification({
+      await this.repo.addNotification({
         id: randomUUID(), kind: 'meeting.failed', title: `Meeting gagal: ${meeting.topic}`,
         detail: message.slice(0, 200), entityRef: meeting.id,
         agentId: organizer?.id ?? null, isRead: false, createdAt: now(),
       })
       broadcastControl('notification', { kind: 'meeting.failed', meetingId: meeting.id })
-      this.repo.addActivity('system', 'meeting.failed', meeting.id, `"${meeting.topic}" — ${message.slice(0, 160)}`)
+      await this.repo.addActivity('system', 'meeting.failed', meeting.id, `"${meeting.topic}" — ${message.slice(0, 160)}`)
       broadcastControl('meeting-ended', { meetingId: meeting.id, status: 'failed' })
     } finally {
       clearInterval(ticker)

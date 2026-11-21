@@ -19,9 +19,21 @@ export interface ToolSpec {
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<{ result: unknown; resultStatus: string; artifact?: { fileName: string; title: string } }>
 }
 
+/**
+ * Pluggable artifact body storage. Locally, bodies are files under
+ * artifactsDir and no store is injected. The Worker runtime has no
+ * filesystem, so the cloud injects a D1-backed store (db/d1-artifacts.ts)
+ * and the tools use it instead of the fs — same file names, same results.
+ */
+export interface ArtifactStore {
+  save(fileName: string, content: string): Promise<void>
+  read(fileName: string): Promise<string>
+}
+
 export interface ToolContext {
   artifactsDir: string
   taskId: string
+  store?: ArtifactStore
 }
 
 function slugify(s: string): string {
@@ -53,10 +65,14 @@ export const TOOLS: Record<string, ToolSpec> = {
       const title = String(args.title ?? 'Document')
       const content = String(args.content ?? '')
       if (!content.trim()) throw new Error('write_document called with empty content')
-      await mkdir(ctx.artifactsDir, { recursive: true })
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
       const fileName = `${slugify(title)}-${stamp}.md`
-      await writeFile(join(ctx.artifactsDir, fileName), content.trim() + '\n', 'utf8')
+      if (ctx.store) {
+        await ctx.store.save(fileName, content.trim() + '\n')
+      } else {
+        await mkdir(ctx.artifactsDir, { recursive: true })
+        await writeFile(join(ctx.artifactsDir, fileName), content.trim() + '\n', 'utf8')
+      }
       return {
         result: { ok: true, artifact: fileName, note: 'Document saved as the task artifact.' },
         resultStatus: 'ok',
@@ -84,7 +100,7 @@ export const TOOLS: Record<string, ToolSpec> = {
     async execute(args, ctx) {
       const name = basename(String(args.name ?? ''))
       if (!name.endsWith('.md')) throw new Error('Only .md artifacts can be read')
-      const text = await readFile(join(ctx.artifactsDir, name), 'utf8')
+      const text = ctx.store ? await ctx.store.read(name) : await readFile(join(ctx.artifactsDir, name), 'utf8')
       return { result: { ok: true, name, content: text.slice(0, 8000) }, resultStatus: 'ok' }
     },
   },

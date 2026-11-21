@@ -14,8 +14,10 @@ Phase 7 — Performance, Security & QA. Architecture: see
 > sensitive tools, and per-agent usage records (Tasks panel → LIVE tasks).
 > Phase 4 wires that engine to the world in real time: live run steps,
 > real multi-agent LLM meetings (Meetings panel), a notification center,
-> and follow-live camera tracking. User accounts (Cloudflare Access) remain
-> *Integration Required* — see the Phase 3 table below.
+> and follow-live camera tracking. The whole stack is also deployed on
+> the Cloudflare Stack with a JWT login — see **Cloud deployment — LIVE
+> (2026-11-22)** below; the phase tables are the historical record of
+> how it got there.
 
 ## Run it
 
@@ -234,17 +236,31 @@ filesystem SQLite replays the WAL on open and nothing is lost. Do not
 delete `data/`. Runtime re-verification of the API fixes and the live
 Kenari QA items should be re-run once the orchestrator can start again.
 
+## Cloud deployment — LIVE (2026-11-22)
+
+- **Web**: https://agentopia.pages.dev (Pages project `agentopia`, built
+  with `VITE_ORCHESTRATOR_URL` pointing at the Worker below).
+- **Orchestrator**: https://agentopia-orchestrator.hasdev.workers.dev —
+  Worker + one Durable Object running the same engines and the same
+  frozen §1.3 event contract; persistence is the real D1 database
+  `agentopia-db` via the implemented `D1Repository` (migrations
+  0001–0003 applied). Verified end-to-end with a throwaway login:
+  agent + task created through the Worker were found in D1, the run
+  failed honestly on the missing LLM secret, and the test rows were
+  deleted again.
+- **Auth**: JWT (HS256, 24 h) issued by `POST /auth/login` against the
+  `AUTH_USERNAME` / `AUTH_PASSWORD` / `JWT_SECRET` Worker secrets —
+  Lutfi's decision (2026-11-22) replacing the Cloudflare Access plan;
+  no custom domain, no zone changes. `AUTH_USERNAME` and `JWT_SECRET`
+  are set; **`AUTH_PASSWORD` is deliberately not set yet** — until Lutfi
+  sets it, login answers 503 "auth not configured" (fail-closed) and
+  every protected endpoint answers 401. Local mode keeps no auth.
+- **LLM in the cloud**: `KENARI_API_KEY` is not set as a Worker secret
+  yet, so cloud tasks fail honestly with "KENARI_API_KEY not configured"
+  until Lutfi sets it. Local runs via `run.py` are unaffected.
+
 ## Remaining Integration Required
 
-- **Cloudflare D1**: migrations + `D1Repository` stub are prepared in
-  `cloudflare/` (target swapped from Supabase on Lutfi's decision,
-  2026-11-21); no D1 database has been created. Per-org isolation test
-  NOT TESTED (no cloud database exists). Activation: `cloudflare/README.md`.
-- **User auth**: none exists by design so far — the orchestrator API is
-  unauthenticated and CORS-open for local development. Do not expose
-  :8787 beyond localhost until auth (Cloudflare Access) lands. The approval gate
-  protects against an *agent* acting without a human; it is not a
-  network security boundary.
 - **Shared/server layout persistence** for Build Mode (localStorage only).
 - **Schedule modes** Realistic / Always Working / Custom (Phase 5 §6 item).
 - **Export-file download** verification in a real browser (headless blob

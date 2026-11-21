@@ -2,7 +2,7 @@ import type { WorkEventType } from '@living-world/shared-types'
 import { emitWorkEvent } from './eventBus'
 import { pushLog, useWorldStore } from '../state/stores'
 import { demoDriver } from './DemoDriver'
-import { ORCHESTRATOR_URL, useMeetingLiveStore, useServerStore } from './ServerApi'
+import { ORCHESTRATOR_URL, getAuthToken, useMeetingLiveStore, useServerStore } from './ServerApi'
 
 export { ORCHESTRATOR_URL }
 
@@ -14,9 +14,10 @@ export { ORCHESTRATOR_URL }
 // not care) which source produced an event.
 //
 // Phase 3: the orchestrator behind this stream is now a real task engine
-// (SQLite-backed agents/tasks/runs — see ServerApi.ts). User accounts
-// (Cloudflare Access) and Cloudflare D1 remain Integration Required
-// (Settings panel says so, plainly).
+// (SQLite-backed agents/tasks/runs — see ServerApi.ts). In the cloud
+// deployment the same engine runs in a Worker on D1 and the stream is
+// guarded by JWT login (EventSource cannot set headers, so the token
+// rides as a ?token= query parameter — the Worker accepts it there).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface LiveConnection {
@@ -56,7 +57,8 @@ export function connectLive(): LiveConnection {
     return { ok: false, reason: 'EventSource is not available in this browser.' }
   }
   try {
-    es = new EventSource(`${ORCHESTRATOR_URL}/events`)
+    const token = getAuthToken()
+    es = new EventSource(token ? `${ORCHESTRATOR_URL}/events?token=${encodeURIComponent(token)}` : `${ORCHESTRATOR_URL}/events`)
   } catch (err) {
     return { ok: false, reason: `Could not open live event stream: ${String(err)}` }
   }
@@ -161,14 +163,28 @@ export function connectLive(): LiveConnection {
     ok: false,
     reason:
       'Live channel opening — the orchestrator (apps/orchestrator, Kenari) streams real events here. ' +
-      'User accounts (Cloudflare Access) remain Integration Required.',
+      'The cloud deployment asks for a JWT login before the stream opens.',
   }
+}
+
+/** Close the stream (logout / before reconnecting with a fresh token). */
+export function disconnectLive() {
+  if (es) {
+    es.close()
+    es = null
+  }
+  connected = false
+  useServerStore.getState().setStreamConnected(false)
 }
 
 /** Trigger the one real proof task on the orchestrator. */
 export async function runLiveProof(): Promise<{ ok: boolean; message: string }> {
   try {
-    const res = await fetch(`${ORCHESTRATOR_URL}/run-live-proof`, { method: 'POST' })
+    const token = getAuthToken()
+    const res = await fetch(`${ORCHESTRATOR_URL}/run-live-proof`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
     const json = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
     if (!res.ok || !json.ok) {
       return { ok: false, message: json.error ?? `Orchestrator returned HTTP ${res.status}` }
@@ -184,7 +200,10 @@ export async function runLiveProof(): Promise<{ ok: boolean; message: string }> 
 
 /** Fetch an artifact's real content from the orchestrator (never fabricated in the UI). */
 export async function fetchArtifact(name: string): Promise<string> {
-  const res = await fetch(`${ORCHESTRATOR_URL}/artifact?name=${encodeURIComponent(name)}`)
+  const token = getAuthToken()
+  const res = await fetch(`${ORCHESTRATOR_URL}/artifact?name=${encodeURIComponent(name)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
   if (!res.ok) throw new Error(`Artifact fetch failed: HTTP ${res.status}`)
   return res.text()
 }

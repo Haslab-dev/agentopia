@@ -8,7 +8,32 @@ import { create } from 'zustand'
 // clearly-labelled demo data — never silently pretend server data exists.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ORCHESTRATOR_URL = 'http://localhost:8787'
+// Baked at build time (Vite env). Local dev falls back to the Bun
+// orchestrator on localhost; the cloud build sets
+// VITE_ORCHESTRATOR_URL=https://agentopia-orchestrator.hasdev.workers.dev.
+export const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL ?? 'http://localhost:8787'
+
+// ── Cloud auth (JWT) ─────────────────────────────────────────────────────────
+// The cloud Worker requires a Bearer JWT on every endpoint except
+// /health (see apps/orchestrator/src/auth.ts). The token is obtained from
+// POST /auth/login and kept in localStorage. The local orchestrator has
+// no auth — when no token is stored, no header is sent and nothing
+// changes locally. A 401 from the API raises `authRequired` in the store
+// and the LoginGate (ui/LoginGate.tsx) takes over.
+const TOKEN_KEY = 'agentopia-auth-token'
+
+export function getAuthToken(): string | null {
+  try {
+    return window.localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 export interface ServerAgentConfig {
   agentId: string
@@ -145,6 +170,13 @@ export interface ServerNotification {
 interface ServerStore {
   online: boolean
   streamConnected: boolean
+  /** True when the API demands a login (cloud JWT) and we have no valid token. */
+  authRequired: boolean
+  /** The stored JWT, mirrored in state so the UI can show a logout control. */
+  authToken: string | null
+  setAuthRequired: (b: boolean) => void
+  login: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>
+  logout: () => void
   agents: ServerAgent[]
   tasks: ServerTask[]
   approvals: ServerApproval[]
@@ -160,7 +192,11 @@ interface ServerStore {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${ORCHESTRATOR_URL}${path}`)
+  const res = await fetch(`${ORCHESTRATOR_URL}${path}`, { headers: { ...authHeaders() } })
+  if (res.status === 401) {
+    useServerStore.getState().setAuthRequired(true)
+    throw new Error('HTTP 401')
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return (await res.json()) as T
 }
@@ -168,9 +204,13 @@ async function get<T>(path: string): Promise<T> {
 async function send<T>(path: string, method: 'POST' | 'PATCH', body: unknown): Promise<T> {
   const res = await fetch(`${ORCHESTRATOR_URL}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
   })
+  if (res.status === 401) {
+    useServerStore.getState().setAuthRequired(true)
+    throw new Error('Unauthorized — login required')
+  }
   const json = (await res.json().catch(() => ({}))) as T & { ok?: boolean; error?: string }
   if (!res.ok || (json as { ok?: boolean }).ok === false) {
     throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`)
@@ -178,9 +218,43 @@ async function send<T>(path: string, method: 'POST' | 'PATCH', body: unknown): P
   return json
 }
 
-export const useServerStore = create<ServerStore>((set) => ({
+export const useServerStore = create<ServerStore>((set, getState) => ({
   online: false,
   streamConnected: false,
+  authRequired: false,
+  authToken: getAuthToken(),
+  setAuthRequired: (authRequired) => set({ authRequired }),
+  login: async (username, password) => {
+    try {
+      const res = await fetch(`${ORCHESTRATOR_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; token?: string; error?: string }
+      if (!res.ok || !body.ok || !body.token) {
+        return { ok: false, error: body.error ?? `Login gagal (HTTP ${res.status})` }
+      }
+      try {
+        window.localStorage.setItem(TOKEN_KEY, body.token)
+      } catch {
+        /* storage unavailable — the token still lives in store state */
+      }
+      set({ authToken: body.token, authRequired: false })
+      void getState().refresh()
+      return { ok: true }
+    } catch {
+      return { ok: false, error: 'Orchestrator tidak terjangkau.' }
+    }
+  },
+  logout: () => {
+    try {
+      window.localStorage.removeItem(TOKEN_KEY)
+    } catch {
+      /* ignore */
+    }
+    set({ authToken: null, authRequired: true, online: false })
+  },
   agents: [],
   tasks: [],
   approvals: [],

@@ -880,11 +880,12 @@ export function SettingsPanel() {
       {pricingNote && <p className="mt-2 text-[11px] leading-snug text-ink/50">{pricingNote}</p>}
       <div className="mt-3 rounded-xl bg-amber-100 px-3 py-2.5 text-[12px] leading-snug text-amber-900">
         <CircleAlert size={13} className="mr-1 inline" />
-        <b>User accounts — Integration Required.</b> Login/registration is designed on
-        Cloudflare Access (architecture §4); the cloud target is the Cloudflare stack
-        (Pages + Worker + D1). The D1 migration is prepared in <code className="rounded bg-white/70 px-1">cloudflare/d1/migrations/</code> and
-        a D1 repository stub waits behind the same interface — but no D1 database is
-        created yet, so <b>no login is offered</b> rather than faking one.
+        <b>Cloud login — JWT.</b> The cloud deployment (Pages + Worker +
+        D1 database <code className="rounded bg-white/70 px-1">agentopia-db</code>) guards its API with a
+        username/password login that issues a 24-hour JWT; credentials live only as Worker
+        secrets, set by the owner. Until the owner sets <code className="rounded bg-white/70 px-1">AUTH_PASSWORD</code>,
+        the login endpoint answers <i>auth not configured</i> — fail-closed, by design.
+        Local mode (this orchestrator on localhost) has no login at all.
       </div>
       <div className="mt-2 rounded-xl bg-sand/70 px-3 py-2.5 text-[12px] leading-snug text-ink/70">
         <b>External messaging — Integration Required.</b> The <code className="rounded bg-white/70 px-1">send_external_message</code> tool
@@ -1050,8 +1051,8 @@ export function ContextPanel() {
           </button>
           <p className="mt-2 text-[11px] leading-snug text-ink/50">
             Real tasks now run through the Phase 3 engine (orchestrator + database) on the
-            same frozen event contract — see the Tasks panel. User accounts remain
-            <b> Integration Required</b> (Cloudflare D1 — Integration Required, Settings panel).
+            same frozen event contract — see the Tasks panel. The cloud deployment adds a
+            JWT login in front of the API (Settings panel).
           </p>
         </>
       )}

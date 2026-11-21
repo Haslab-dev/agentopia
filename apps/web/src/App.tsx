@@ -4,6 +4,7 @@ import { Scene } from './world/Scene'
 import { Sidebar, Ticker, Toolbar, TopBar } from './ui/chrome'
 import { ActivityPanel, AgentsPanel, BuildingsPanel, ContextPanel, MeetingsPanel, SettingsPanel, TasksPanel } from './ui/panels'
 import { BuildPanel } from './ui/BuildPanel'
+import { LoginGate } from './ui/LoginGate'
 import { useUiStore, type ViewKey } from './state/stores'
 import { startSimulation } from './simulation/engine'
 import { connectLive } from './agent-client/LiveClient'
@@ -66,6 +67,7 @@ export default function App() {
         <ContextPanel />
         <Toolbar />
         <Ticker />
+        <LoginGate />
       </div>
     </div>
   )

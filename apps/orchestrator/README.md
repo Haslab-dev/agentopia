@@ -94,17 +94,24 @@ without the launcher works too, but `/run-live-proof` will refuse with
   task failed / approval pending / meeting completed / meeting failed,
   and pushed live as a `notification` control frame.
 
+## Cloud runtime (live since 2026-11-22)
+
+The same code also runs as a Cloudflare Worker: `src/worker.ts` forwards
+all traffic to one Durable Object holding the engines, backed by the
+implemented `src/db/d1-repository.ts` on the real D1 database
+`agentopia-db` (binding `env.agentopia_db`; migrations in
+`cloudflare/d1/migrations/` at repo root). The HTTP surface is shared
+verbatim with local mode via `src/app.ts`; the sync `Repository`
+interface is untouched — the cloud implements its async mirror
+(`src/db/async-repository.ts`). Auth is a JWT login built into the
+Worker (`src/auth.ts`); the local server mounts no auth. Details and
+the remaining owner-only steps (setting the `KENARI_API_KEY` and
+`AUTH_PASSWORD` secrets): `cloudflare/README.md` at repo root.
+
 ## Not here yet (Integration Required)
 
-Cloudflare D1 persistence + auth: the D1 migration is written
-(`cloudflare/d1/migrations/` at repo root) and `src/db/d1-repository.ts`
-holds the same interface as a loud stub — D1 is reachable only from the
-Worker runtime (binding `env.DB`), so it activates with the orchestrator's
-Worker port and a D1 database that has not been created yet (plan:
-`cloudflare/README.md` at repo root). Auth will be Cloudflare Access.
-No fake login exists. External messaging delivery, multi-provider
-adapters beyond the generic OpenAI-compatible one, and parallel run
-workers are likewise not built.
+External messaging delivery, multi-provider adapters beyond the generic
+OpenAI-compatible one, and parallel run workers are not built.
 
 ## The proof run
 

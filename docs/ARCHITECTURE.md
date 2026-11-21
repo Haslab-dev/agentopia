@@ -4,6 +4,8 @@ Dokumen arsitektur induk. Ditulis oleh @Wang (Innovator), diimplementasikan oleh
 Prinsip yang tidak bisa ditawar: **backend adalah sumber kebenaran; dunia 3D hanyalah representasi visualnya.** Avatar tidak pernah "mengaku" menyelesaikan pekerjaan yang backend gagalkan.
 
 > **Catatan revisi — 2026-11-21:** target cloud diganti dari Supabase ke Cloudflare Stack atas keputusan Lutfi (web → Pages; orchestrator → Worker + Durable Objects; database → D1; artefak → R2; auth → Cloudflare Access). Persistence yang berjalan tetap SQLite lokal; migrasi D1 ada di `cloudflare/d1/migrations/`, peta target + langkah aktivasi di `cloudflare/README.md`. Kontrak event §1.3 tidak berubah.
+>
+> **Catatan revisi — 2026-11-22:** cloud deployment LIVE. Web di Pages (`agentopia.pages.dev`); orchestrator sebagai Worker + satu Durable Object di `agentopia-orchestrator.hasdev.workers.dev`, memakai D1 `agentopia-db` betulan lewat `D1Repository` (implementasi penuh; interface `Repository` sinkron di kode tidak berubah — cloud mengimplementasikan cermin asinkronnya). Dua penyimpangan dari peta 2026-11-21, keduanya keputusan Lutfi/pragmatis dan tercatat di `cloudflare/README.md`: (1) auth BUKAN Cloudflare Access — diganti JWT username/password di dalam Worker, tanpa custom domain dan tanpa perubahan zone; (2) isi artefak disimpan di tabel D1 `artifact_contents`, bukan R2. Kontrak event §1.3 tetap tidak berubah; payload event dari cloud identik dengan lokal.
 
 ---
 

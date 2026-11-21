@@ -37,7 +37,14 @@ export interface ProofResult {
   error?: string
 }
 
-export async function runLiveProof(llm: CompatibleLLM, emit: EmitFn, artifactsDir: string): Promise<ProofResult> {
+export async function runLiveProof(
+  llm: CompatibleLLM,
+  emit: EmitFn,
+  artifactsDir: string,
+  // Worker runtime has no filesystem: the caller may inject a saver
+  // (D1-backed) and the proof writes through it instead of the fs.
+  saveArtifact?: (fileName: string, content: string) => Promise<void>,
+): Promise<ProofResult> {
   const taskId = `live-${Date.now()}`
   const agentId = PROOF_AGENT_ID
 
@@ -74,14 +81,18 @@ export async function runLiveProof(llm: CompatibleLLM, emit: EmitFn, artifactsDi
     )
 
     emit('tool.started', agentId, taskId, { tool: 'write_artifact' })
-    await mkdir(artifactsDir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     const fileName = `rencana-kerja-tim-ai-${stamp}.md`
     const footer =
       `\n\n---\n_Dihasilkan oleh model ${result.model} via gateway Kenari · ` +
       `token: ${result.usage?.prompt_tokens ?? '?'} masuk / ${result.usage?.completion_tokens ?? '?'} keluar · ` +
       `latensi ${(result.latencyMs / 1000).toFixed(1)} dtk_\n`
-    await writeFile(join(artifactsDir, fileName), result.content.trim() + footer, 'utf8')
+    if (saveArtifact) {
+      await saveArtifact(fileName, result.content.trim() + footer)
+    } else {
+      await mkdir(artifactsDir, { recursive: true })
+      await writeFile(join(artifactsDir, fileName), result.content.trim() + footer, 'utf8')
+    }
     emit('tool.finished', agentId, taskId, { tool: 'write_artifact', artifact: fileName })
 
     emit('task.completed', agentId, taskId, {

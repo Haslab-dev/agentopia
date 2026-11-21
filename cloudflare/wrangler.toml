@@ -1,0 +1,29 @@
+# Agentopia orchestrator — Cloudflare Worker + Durable Objects + D1.
+# Deploy ONLY through the connector wrapper (never wrangler directly):
+#   python3 ~/workspace/custom-connectors/custom.cloudflare/bin/run-wrangler.py \
+#     --account-id 06ea3b1955007373e68a8d3489fd5781 -- deploy -c cloudflare/wrangler.toml
+# (run from the repo root; -c points at this file)
+#
+# Secrets (never in this file): KENARI_API_KEY, AUTH_USERNAME,
+# AUTH_PASSWORD, JWT_SECRET — set with `wrangler secret put <NAME>`.
+# Auth note (2026-11-22): no custom domain / Access — the Worker guards
+# itself with JWT (apps/orchestrator/src/auth.ts) on workers.dev.
+
+name = "agentopia-orchestrator"
+main = "../apps/orchestrator/src/worker.ts"
+compatibility_date = "2025-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[[d1_databases]]
+binding = "agentopia_db"
+database_name = "agentopia-db"
+database_id = "8c50a2d9-ae90-4e5f-9ac5-f72c16088f52"
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR"
+class_name = "OrchestratorDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OrchestratorDO"]

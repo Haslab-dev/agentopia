@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { WorkEventType } from '@living-world/shared-types'
-import type { Repository, RunRow, TaskRow } from './db'
+import type { RunRow, TaskRow } from './db'
+import type { AsyncRepository } from './db/async-repository'
 import { CompatibleLLM, type ToolCallRequest, type TurnMessage } from './llm/compatible'
-import { TOOLS, toolDefsFor } from './tools'
+import { TOOLS, toolDefsFor, type ArtifactStore } from './tools'
 import { estimateCostUsd } from './pricing'
 import { broadcastControl, emit } from './events'
 
@@ -31,15 +32,27 @@ export class TaskEngine {
   private waiters = new Map<string, (d: 'approved' | 'rejected') => void>()
 
   constructor(
-    private repo: Repository,
+    private repo: AsyncRepository,
     private llm: CompatibleLLM,
     private artifactsDir: string,
     private keyConfigured: boolean,
+    // Worker runtime only: artifact bodies go to this store (D1) instead
+    // of the local filesystem. Undefined locally — fs path unchanged.
+    private artifactStore?: ArtifactStore,
   ) {}
 
   start() {
     setInterval(() => void this.tick(), 1000)
     void this.tick()
+  }
+
+  /**
+   * One drain pass of the queue, for runtimes without a persistent timer
+   * (the Durable Object calls this on request kicks and alarms). Local
+   * mode uses start()'s interval instead. Same busy-guard, same semantics.
+   */
+  async pump(): Promise<void> {
+    await this.tick()
   }
 
   /** Called by the API when a human decides an approval. */
@@ -57,7 +70,7 @@ export class TaskEngine {
 
   private async tick() {
     if (this.busy) return
-    const task = this.repo.nextQueuedTask()
+    const task = await this.repo.nextQueuedTask()
     if (!task) return
     this.busy = true
     try {
@@ -69,18 +82,18 @@ export class TaskEngine {
     }
   }
 
-  private emitTask(taskId: string, type: WorkEventType, agentId: string, payload?: Record<string, string | number | boolean>) {
-    this.repo.addTaskEvent(taskId, type, payload ?? {})
+  private async emitTask(taskId: string, type: WorkEventType, agentId: string, payload?: Record<string, string | number | boolean>) {
+    await this.repo.addTaskEvent(taskId, type, payload ?? {})
     emit(type, agentId, taskId, payload)
   }
 
   private async execute(task: TaskRow) {
-    const agent = this.repo.getAgent(task.agentId)
+    const agent = await this.repo.getAgent(task.agentId)
     const run: RunRow = {
       id: randomUUID(),
       taskId: task.id,
       agentId: task.agentId,
-      runNumber: this.repo.countRuns(task.id) + 1,
+      runNumber: await this.repo.countRuns(task.id) + 1,
       provider: agent?.config.provider ?? 'kenari',
       model: agent?.config.model ?? this.llm.modelName,
       status: 'running',
@@ -88,19 +101,19 @@ export class TaskEngine {
       endedAt: null,
       error: null,
     }
-    this.repo.createRun(run)
-    this.repo.setTaskStatus(task.id, 'running')
-    this.repo.addActivity('system', 'run.started', run.id, `Run #${run.runNumber} for "${task.title}"`)
+    await this.repo.createRun(run)
+    await this.repo.setTaskStatus(task.id, 'running')
+    await this.repo.addActivity('system', 'run.started', run.id, `Run #${run.runNumber} for "${task.title}"`)
 
     try {
       if (!agent) throw new Error(`Agent ${task.agentId} not found`)
       if (!agent.isActive) throw new Error(`Agent ${agent.name} is deactivated`)
       if (!this.keyConfigured) throw new Error('KENARI_API_KEY not configured — start the orchestrator via run.py')
 
-      this.emitTask(task.id, 'task.assigned', agent.id, { title: task.title, provider: run.provider, model: run.model })
+      await this.emitTask(task.id, 'task.assigned', agent.id, { title: task.title, provider: run.provider, model: run.model })
       // The avatar walks to its desk on this event; the run proceeds after.
       await sleep(5000)
-      this.emitTask(task.id, 'task.started', agent.id)
+      await this.emitTask(task.id, 'task.started', agent.id)
 
       const messages: TurnMessage[] = [
         { role: 'system', content: agent.config.systemPrompt + TOOL_GUIDANCE },
@@ -112,7 +125,7 @@ export class TaskEngine {
       let finalText = ''
 
       for (let turn = 0; turn < MAX_TURNS; turn++) {
-        this.emitTask(task.id, 'run.thinking', agent.id, { provider: run.provider, model: run.model, turn: turn + 1 })
+        await this.emitTask(task.id, 'run.thinking', agent.id, { provider: run.provider, model: run.model, turn: turn + 1 })
         const res = await this.llm.chatTurn(messages, toolDefsFor(agent.config.allowedTools), {
           temperature: agent.config.temperature,
           model: run.model,
@@ -121,7 +134,7 @@ export class TaskEngine {
         })
         totalIn += res.usage?.prompt_tokens ?? 0
         totalOut += res.usage?.completion_tokens ?? 0
-        this.repo.addUsage({
+        await this.repo.addUsage({
           id: randomUUID(), agentId: agent.id, runId: run.id, provider: run.provider, model: res.model,
           tokensIn: res.usage?.prompt_tokens ?? 0, tokensOut: res.usage?.completion_tokens ?? 0,
           costUsd: estimateCostUsd(res.usage?.prompt_tokens ?? 0, res.usage?.completion_tokens ?? 0),
@@ -150,8 +163,8 @@ export class TaskEngine {
       if (!artifactFile && finalText.trim().length > 40) {
         const spec = TOOLS.write_document
         const t0 = Date.now()
-        const res = await spec.execute({ title: task.title, content: finalText }, { artifactsDir: this.artifactsDir, taskId: task.id })
-        this.repo.addToolCall({
+        const res = await spec.execute({ title: task.title, content: finalText }, { artifactsDir: this.artifactsDir, taskId: task.id, store: this.artifactStore })
+        await this.repo.addToolCall({
           id: randomUUID(), runId: run.id, toolName: 'write_document',
           argsSummary: 'Final answer saved as artifact (engine fallback — model did not call the tool)',
           resultStatus: 'ok_engine_fallback', durationMs: Date.now() - t0,
@@ -159,21 +172,21 @@ export class TaskEngine {
         })
         if (res.artifact) {
           artifactFile = res.artifact.fileName
-          this.repo.addArtifact({
+          await this.repo.addArtifact({
             id: randomUUID(), taskId: task.id, runId: run.id, agentId: agent.id,
             kind: 'doc', title: res.artifact.title, fileName: res.artifact.fileName, createdAt: now(),
           })
         }
       }
 
-      this.repo.updateRun(run.id, { status: 'completed', endedAt: now() })
-      this.repo.setTaskStatus(task.id, 'completed')
-      this.emitTask(task.id, 'task.completed', agent.id, {
+      await this.repo.updateRun(run.id, { status: 'completed', endedAt: now() })
+      await this.repo.setTaskStatus(task.id, 'completed')
+      await this.emitTask(task.id, 'task.completed', agent.id, {
         artifact: artifactFile ?? '',
         model: run.model, tokensIn: totalIn, tokensOut: totalOut,
       })
-      this.repo.addActivity('agent', 'task.completed', task.id, `"${task.title}" by ${agent.name} · ${totalIn + totalOut} tokens${artifactFile ? ` · artifact ${artifactFile}` : ''}`)
-      this.repo.addNotification({
+      await this.repo.addActivity('agent', 'task.completed', task.id, `"${task.title}" by ${agent.name} · ${totalIn + totalOut} tokens${artifactFile ? ` · artifact ${artifactFile}` : ''}`)
+      await this.repo.addNotification({
         id: randomUUID(), kind: 'task.completed', title: `Task selesai: ${task.title}`,
         detail: `${agent.name} · ${totalIn + totalOut} tokens${artifactFile ? ` · artefak ${artifactFile}` : ''}`,
         entityRef: task.id, agentId: agent.id, isRead: false, createdAt: now(),
@@ -181,11 +194,11 @@ export class TaskEngine {
       broadcastControl('notification', { kind: 'task.completed', taskId: task.id })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      this.repo.updateRun(run.id, { status: 'failed', endedAt: now(), error: message })
-      this.repo.setTaskStatus(task.id, 'failed')
-      this.emitTask(task.id, 'task.failed', task.agentId, { error: message.slice(0, 200) })
-      this.repo.addActivity('system', 'task.failed', task.id, `"${task.title}" — ${message.slice(0, 160)}`)
-      this.repo.addNotification({
+      await this.repo.updateRun(run.id, { status: 'failed', endedAt: now(), error: message })
+      await this.repo.setTaskStatus(task.id, 'failed')
+      await this.emitTask(task.id, 'task.failed', task.agentId, { error: message.slice(0, 200) })
+      await this.repo.addActivity('system', 'task.failed', task.id, `"${task.title}" — ${message.slice(0, 160)}`)
+      await this.repo.addNotification({
         id: randomUUID(), kind: 'task.failed', title: `Task gagal: ${task.title}`,
         detail: message.slice(0, 200), entityRef: task.id, agentId: task.agentId,
         isRead: false, createdAt: now(),
@@ -203,18 +216,18 @@ export class TaskEngine {
   ): Promise<{ result: unknown; artifactFile?: string }> {
     const spec = TOOLS[call.name]
     if (!spec) {
-      this.repo.addToolCall({
-        id: randomUUID(), runId: run.id, toolName: call.name, argsSummary: spec?.summarize?.(call.args) ?? '',
+      await this.repo.addToolCall({
+        id: randomUUID(), runId: run.id, toolName: call.name, argsSummary: '',
         resultStatus: 'unknown_tool', durationMs: 0, requiresApproval: false, approvalId: null, createdAt: now(),
       })
       return { result: { ok: false, error: `Unknown tool: ${call.name}` } }
     }
     if (!allowedTools.includes(call.name)) {
-      this.repo.addToolCall({
+      await this.repo.addToolCall({
         id: randomUUID(), runId: run.id, toolName: call.name, argsSummary: spec.summarize(call.args),
         resultStatus: 'denied_permission', durationMs: 0, requiresApproval: false, approvalId: null, createdAt: now(),
       })
-      this.repo.addActivity('system', 'tool.denied', run.id, `${call.name} not in ${agentId}'s allowed tools`)
+      await this.repo.addActivity('system', 'tool.denied', run.id, `${call.name} not in ${agentId}'s allowed tools`)
       return { result: { ok: false, error: `Tool ${call.name} is not permitted for this agent.` } }
     }
 
@@ -222,19 +235,19 @@ export class TaskEngine {
     let toolCallId = randomUUID()
     if (spec.sensitive) {
       const approvalId = randomUUID()
-      this.repo.createApproval({
+      await this.repo.createApproval({
         id: approvalId, taskId: task.id, runId: run.id, toolCallId: toolCallId,
         actionSummary: spec.summarize(call.args), status: 'pending', createdAt: now(), decidedAt: null,
       })
-      this.repo.addToolCall({
+      await this.repo.addToolCall({
         id: toolCallId, runId: run.id, toolName: call.name, argsSummary: spec.summarize(call.args),
         resultStatus: 'waiting_approval', durationMs: null, requiresApproval: true, approvalId, createdAt: now(),
       })
-      this.repo.setTaskStatus(task.id, 'waiting_approval')
-      this.repo.updateRun(run.id, { status: 'waiting_approval' })
-      this.emitTask(task.id, 'run.waiting_input', agentId, { tool: call.name, approvalId })
-      this.repo.addActivity('system', 'approval.requested', approvalId, spec.summarize(call.args))
-      this.repo.addNotification({
+      await this.repo.setTaskStatus(task.id, 'waiting_approval')
+      await this.repo.updateRun(run.id, { status: 'waiting_approval' })
+      await this.emitTask(task.id, 'run.waiting_input', agentId, { tool: call.name, approvalId })
+      await this.repo.addActivity('system', 'approval.requested', approvalId, spec.summarize(call.args))
+      await this.repo.addNotification({
         id: randomUUID(), kind: 'approval.pending', title: 'Approval menunggu keputusan',
         detail: spec.summarize(call.args), entityRef: approvalId, agentId,
         isRead: false, createdAt: now(),
@@ -244,11 +257,11 @@ export class TaskEngine {
 
       const decision = await this.waitForDecision(approvalId)
 
-      this.repo.setTaskStatus(task.id, 'running')
-      this.repo.updateRun(run.id, { status: 'running' })
+      await this.repo.setTaskStatus(task.id, 'running')
+      await this.repo.updateRun(run.id, { status: 'running' })
       if (decision === 'rejected') {
-        this.repo.updateToolCall(toolCallId, { resultStatus: 'rejected', durationMs: 0 })
-        this.repo.addActivity('user', 'approval.rejected', approvalId, spec.summarize(call.args))
+        await this.repo.updateToolCall(toolCallId, { resultStatus: 'rejected', durationMs: 0 })
+        await this.repo.addActivity('user', 'approval.rejected', approvalId, spec.summarize(call.args))
         return {
           result: {
             ok: false, rejected: true,
@@ -256,32 +269,32 @@ export class TaskEngine {
           },
         }
       }
-      this.repo.addActivity('user', 'approval.approved', approvalId, spec.summarize(call.args))
+      await this.repo.addActivity('user', 'approval.approved', approvalId, spec.summarize(call.args))
     } else {
-      this.repo.addToolCall({
+      await this.repo.addToolCall({
         id: toolCallId, runId: run.id, toolName: call.name, argsSummary: spec.summarize(call.args),
         resultStatus: 'running', durationMs: null, requiresApproval: false, approvalId: null, createdAt: now(),
       })
     }
 
-    this.emitTask(task.id, 'tool.started', agentId, { tool: call.name })
+    await this.emitTask(task.id, 'tool.started', agentId, { tool: call.name })
     const t0 = Date.now()
     try {
-      const res = await spec.execute(call.args, { artifactsDir: this.artifactsDir, taskId: task.id })
-      this.repo.updateToolCall(toolCallId, { resultStatus: res.resultStatus, durationMs: Date.now() - t0 })
+      const res = await spec.execute(call.args, { artifactsDir: this.artifactsDir, taskId: task.id, store: this.artifactStore })
+      await this.repo.updateToolCall(toolCallId, { resultStatus: res.resultStatus, durationMs: Date.now() - t0 })
       if (res.artifact) {
-        this.repo.addArtifact({
+        await this.repo.addArtifact({
           id: randomUUID(), taskId: task.id, runId: run.id, agentId,
           kind: 'doc', title: res.artifact.title, fileName: res.artifact.fileName, createdAt: now(),
         })
       }
-      this.emitTask(task.id, 'tool.finished', agentId, { tool: call.name, artifact: res.artifact?.fileName ?? '' })
-      this.repo.addActivity('agent', 'tool.executed', run.id, `${call.name} → ${res.resultStatus}`)
+      await this.emitTask(task.id, 'tool.finished', agentId, { tool: call.name, artifact: res.artifact?.fileName ?? '' })
+      await this.repo.addActivity('agent', 'tool.executed', run.id, `${call.name} → ${res.resultStatus}`)
       return { result: res.result, artifactFile: res.artifact?.fileName }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      this.repo.updateToolCall(toolCallId, { resultStatus: 'error', durationMs: Date.now() - t0 })
-      this.emitTask(task.id, 'tool.finished', agentId, { tool: call.name, error: true })
+      await this.repo.updateToolCall(toolCallId, { resultStatus: 'error', durationMs: Date.now() - t0 })
+      await this.emitTask(task.id, 'tool.finished', agentId, { tool: call.name, error: true })
       return { result: { ok: false, error: message } }
     }
   }
